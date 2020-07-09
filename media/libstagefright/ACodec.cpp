@@ -8057,6 +8057,21 @@ bool ACodec::ExecutingState::onOMXEvent(
                 mCodec->freeOutputBuffersNotOwnedByComponent();
 
                 mCodec->changeState(mCodec->mOutputPortSettingsChangedState);
+            } else if (data2 == 1) {
+                // It's way too Hacky but fixes the issue
+                // For Vp9 on Legacy Devices, OMX_IndexConfigCommonOutputCrop
+                // Doubles the output crop, casuing the video to
+                // go out of frame or casues the wrong output crop
+                // to be chosen, casuing the video frame not be updated while
+                // rotating quickly while playing a video in a web browser.
+                mCodec->mMetadataBuffersToSubmit = 0;
+                CHECK_EQ(mCodec->mOMXNode->sendCommand(
+                            OMX_CommandPortDisable, 1),
+                         (status_t)OK);
+
+                mCodec->freeOutputBuffersNotOwnedByComponent();
+                mCodec->changeState(mCodec->mOutputPortSettingsChangedState);
+
             } else if (data2 != OMX_IndexConfigCommonOutputCrop
                     && data2 != OMX_IndexConfigAndroidIntraRefresh) {
                 ALOGV("[%s] OMX_EventPortSettingsChanged 0x%08x",
@@ -8181,7 +8196,7 @@ bool ACodec::OutputPortSettingsChangedState::onOMXEvent(
         case OMX_EventCmdComplete:
         {
             if (data1 == (OMX_U32)OMX_CommandPortDisable) {
-                if (data2 != (OMX_U32)kPortIndexOutput) {
+                if (data2 != (OMX_U32)kPortIndexOutput && data2 != 1) {
                     ALOGW("ignoring EventCmdComplete CommandPortDisable for port %u", data2);
                     return false;
                 }
@@ -8198,13 +8213,19 @@ bool ACodec::OutputPortSettingsChangedState::onOMXEvent(
                 }
 
                 if (err == OK) {
+                    if (data2 == 1) {
+                    err = mCodec->mOMXNode->sendCommand(
+                            OMX_CommandPortEnable, 1);
+                    } else {
                     err = mCodec->mOMXNode->sendCommand(
                             OMX_CommandPortEnable, kPortIndexOutput);
+                    }
                 }
 
                 // Clear the RenderQueue in which queued GraphicBuffers hold the
                 // actual buffer references in order to free them early.
                 mCodec->mRenderTracker.clear(systemTime(CLOCK_MONOTONIC));
+
 
                 if (err == OK) {
                     err = mCodec->allocateBuffersOnPort(kPortIndexOutput);
@@ -8220,9 +8241,14 @@ bool ACodec::OutputPortSettingsChangedState::onOMXEvent(
 
                 return true;
             } else if (data1 == (OMX_U32)OMX_CommandPortEnable) {
-                if (data2 != (OMX_U32)kPortIndexOutput) {
+                if (data2 != (OMX_U32)kPortIndexOutput && data2 != 1) {
                     ALOGW("ignoring EventCmdComplete OMX_CommandPortEnable for port %u", data2);
                     return false;
+                }
+
+                if (data2 == 1) {
+                   mCodec->onOutputFormatChanged();
+                   mCodec->sendFormatChange();
                 }
 
                 ALOGV("[%s] Output port now reenabled.", mCodec->mComponentName.c_str());
